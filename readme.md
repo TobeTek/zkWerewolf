@@ -23,3 +23,5 @@ $  --help
     $  --name=Jane
     Hello, Jane
 ```
+
+Expects a screen size: 1680 X 682

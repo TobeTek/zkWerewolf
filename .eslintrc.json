@@ -4,5 +4,9 @@
     ],
     "rules": {
         "import/no-unresolved": "error"
+    },
+    "parserOptions": {
+        "ecmaVersion": 2015, // Or a later year like 2020 or "latest"
+        "sourceType": "module" // Use this if you are using ES modules (import/export)
     }
 }
