@@ -1,4 +1,3 @@
-import { Table } from '@tqman/ink-table';
 import { Box, Text, useApp, useInput } from 'ink';
 import BigText from 'ink-big-text';
 import Divider from 'ink-divider';
@@ -8,6 +7,7 @@ import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet } from './hooks.js';
+import { formatAddress } from './services.js';
 
 // --- MOCK DATA ---
 const mockGames = [
@@ -84,7 +84,7 @@ const Header = ({ wallet, selectedGame, currentNavItem }) => {
             </Box>
             <Box flexDirection="column" alignItems="center">
                 <Text bold>
-                    Public Key: {wallet?.address || 'Loading wallet...'}
+                    Public Key: {formatAddress(wallet?.address) || 'Loading wallet...'}
                 </Text>
                 {currentNavItem === 'play_game' && selectedGame && (
                     <Box marginTop={1}>
@@ -192,8 +192,7 @@ const GamePlay = React.memo(
         const playOptions = [
             { label: 'Kill', value: 'kill' },
             { label: 'Start Vote', value: 'start_vote' },
-            { label: 'Attend to Villager Business', value: 'villager_business' },
-            { label: 'Skip Turn', value: 'skip' },
+            { label: 'Skip Turn (attend to villager business)', value: 'skip' },
         ];
         const voteOptions = [
             ...selectedGame.players.map(player => ({ label: player, value: player })),

@@ -44,6 +44,7 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
         try {
             const [
                 admin,
+                adminPubKey,
                 userAddressesHash,
                 numPlayers,
                 numWerewolves,
@@ -54,6 +55,7 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
                 currentMoveCommitments,
             ] = await Promise.all([
                 contract.getAdmin(gameId),
+                contract.getAdminPubKey(gameId),
                 contract.getUserAddressesHash(gameId),
                 contract.getNumPlayers(gameId),
                 contract.getNumWerewolves(gameId),
@@ -61,10 +63,11 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
                 contract.getLastTurnTimestamp(gameId),
                 contract.isActive(gameId),
                 contract.getUserRoleCommitments(gameId),
-                contract.getCurrentMoveCommitments(gameId),
+                contract.getMoveCommitment(gameId),
             ]);
             setGame({
                 admin,
+                adminPubKey,
                 userAddressesHash,
                 numPlayers: numPlayers.toNumber(),
                 numWerewolves: numWerewolves.toNumber(),
