@@ -1,142 +1,77 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import 'forge-std/Test.sol';
-import '../src/ZkWerewolf.sol';
+import "forge-std/Test.sol";
+import "../src/ZkWerewolf.sol";
 
 contract ZkWerewolfTest is Test {
-	ZkWerewolf public zkGame;
+    ZkWerewolf public zkWerewolf;
+    address[] public players;
+    bytes32[] public userRoleCommitments;
+    bytes public adminPublicKey;
+    bytes32 public userAddressesHash;
 
-	// Test accounts
-	address admin = address(0xABCD);
-	address player1 = address(0x1001);
-	address player2 = address(0x1002);
-	address player3 = address(0x1003);
+    function setUp() public {
+        zkWerewolf = new ZkWerewolf();
+        players = new address[](4);
+        players[0] = address(1);
+        players[1] = address(2);
+        players[2] = address(3);
+        players[3] = address(4);
+        userRoleCommitments = new bytes32[](4);
+        userRoleCommitments[0] = bytes32(uint256(1));
+        userRoleCommitments[1] = bytes32(uint256(2));
+        userRoleCommitments[2] = bytes32(uint256(3));
+        userRoleCommitments[3] = bytes32(uint256(4));
+        adminPublicKey = abi.encodePacked("adminPublicKey");
+        userAddressesHash = keccak256(abi.encodePacked(players));
+    }
 
-	// Sample data (placeholders)
-	bytes32 userAddressesHash =
-		keccak256(abi.encodePacked(player1, player2, player3));
-	bytes32[] userRoleCommitments;
-	bytes32 moveCommitment1 = keccak256(abi.encodePacked('move1'));
-	bytes32 moveCommitment2 = keccak256(abi.encodePacked('move2'));
-	bytes32 moveCommitment3 = keccak256(abi.encodePacked('move3'));
+    function testCreateGame() public {
+        uint256 gameId = zkWerewolf.createGame(adminPublicKey, userAddressesHash, players, 1, userRoleCommitments);
+        assertEq(zkWerewolf.nextGameId(), 2);
+        assertEq(zkWerewolf.getNumPlayers(gameId), 4);
+        assertEq(zkWerewolf.getNumWerewolves(gameId), 1);
+    }
 
-	function setUp() public {
-		zkGame = new ZkWerewolf();
+    function testCommitMove() public {
+        uint256 gameId = zkWerewolf.createGame(adminPublicKey, userAddressesHash, players, 1, userRoleCommitments);
+        vm.prank(players[0]);
+        bytes32 moveCommitment = bytes32(uint256(123));
+        zkWerewolf.commitMove(gameId, moveCommitment);
+        assertEq(zkWerewolf.getMoveCommitment(gameId, players[0]), moveCommitment);
+    }
 
-		// Prepare userRoleCommitments equal to players count
-		userRoleCommitments.push(
-			keccak256(abi.encodePacked(player1, uint8(1), uint256(123)))
-		); // e.g. werewolf role proof
-		userRoleCommitments.push(
-			keccak256(abi.encodePacked(player2, uint8(0), uint256(456)))
-		);
-		userRoleCommitments.push(
-			keccak256(abi.encodePacked(player3, uint8(0), uint256(789)))
-		);
-	}
+    function testStartVote() public {
+        uint256 gameId = zkWerewolf.createGame(adminPublicKey, userAddressesHash, players, 1, userRoleCommitments);
+        vm.prank(players[0]);
+        zkWerewolf.startVote(gameId);
+        assertTrue(zkWerewolf.isGameVoteActive(gameId));
+    }
 
-	function testCreateGame() public {
-		vm.prank(admin);
-		address[] memory players;
-		players[0] = player1;
-		players[1] = player2;
-		players[2] = player3;
+    function testCastVote() public {
+        uint256 gameId = zkWerewolf.createGame(adminPublicKey, userAddressesHash, players, 1, userRoleCommitments);
+        vm.prank(players[0]);
+        zkWerewolf.startVote(gameId);
+        vm.prank(players[1]);
+        zkWerewolf.castVote(gameId, players[0]);
+        assertEq(zkWerewolf.getVotesAgainstPlayer(gameId, players[0]), 1);
+    }
 
-		uint256 gameId = zkGame.createGame(
-			userAddressesHash,
-			players,
-			1,
-			userRoleCommitments
-		);
+    function testEndVote() public {
+        uint256 gameId = zkWerewolf.createGame(adminPublicKey, userAddressesHash, players, 1, userRoleCommitments);
+        vm.prank(players[0]);
+        zkWerewolf.startVote(gameId);
+        vm.prank(players[1]);
+        zkWerewolf.castVote(gameId, players[0]);
+        vm.prank(players[2]);
+        zkWerewolf.castVote(gameId, players[0]);
 
-		assertTrue(gameId > 0, 'Game ID should be set');
-		assertEq(zkGame.getNumPlayers(gameId), 3);
-		assertEq(zkGame.getNumWerewolves(gameId), 1);
-		assertEq(zkGame.getUserAddressesHash(gameId), userAddressesHash);
-		assertTrue(zkGame.isPlayerInGame(gameId, player1));
-	}
+        vm.warp(block.timestamp + 3 minutes + 1);
+        vm.prank(address(this));
 
-	function testPlayerCommitMove() public {
-		// Use testCreateGame to set up (or hardcode gameId)
-		vm.prank(admin);
-		address[] memory players;
-		players[0] = player1;
-		players[1] = player2;
-		players[2] = player3;
-
-		uint256 gameId = zkGame.createGame(
-			userAddressesHash,
-			players,
-			1,
-			userRoleCommitments
-		);
-
-		vm.startPrank(player1);
-		zkGame.commitMove(gameId, moveCommitment1);
-		vm.stopPrank();
-
-		bytes32 storedMove = zkGame.getMoveCommitment(gameId, player1);
-		assertEq(storedMove, moveCommitment1);
-
-		vm.prank(player2);
-		zkGame.commitMove(gameId, moveCommitment2);
-
-		// Player 2 can't submit twice
-		vm.prank(player2);
-		vm.expectRevert('Already submitted move this turn');
-		zkGame.commitMove(gameId, moveCommitment2);
-	}
-
-	function testEndTurn() public {
-		vm.prank(admin);
-		address[] memory players;
-		players[0] = player1;
-		players[1] = player2;
-		players[2] = player3;
-		uint256 gameId = zkGame.createGame(
-			userAddressesHash,
-			players,
-			1,
-			userRoleCommitments
-		);
-
-		vm.prank(player1);
-		zkGame.commitMove(gameId, moveCommitment1);
-		vm.prank(player2);
-		zkGame.commitMove(gameId, moveCommitment2);
-
-		// Warp time to after turn duration
-		vm.warp(block.timestamp + 4 minutes);
-
-		vm.prank(admin);
-		zkGame.endTurn(gameId, new bytes32[](0), '0x');
-
-		// Test turn increment
-		// Assume turnNumber getter added
-		// uint lastTurn = zkGame.turnNumber();
-		// assertEq(lastTurn, 2);
-	}
-
-	function testStartNextTurn() public {
-		vm.prank(admin);
-		address[] memory players;
-		players[0] = player1;
-		players[1] = player2;
-		players[2] = player3;
-		uint256 gameId = zkGame.createGame(
-			userAddressesHash,
-			players,
-			1,
-			userRoleCommitments
-		);
-
-		// Warp time so next turn allowed
-		vm.warp(block.timestamp + 4 minutes);
-
-		vm.prank(player1);
-		zkGame.startNextTurn(gameId);
-
-		// No revert means success
-	}
+        zkWerewolf.endVote(gameId);
+        assertFalse(zkWerewolf.isGameVoteActive(gameId));
+        assertFalse(zkWerewolf.isPlayerInGame(gameId, players[0]));
+    }
 }

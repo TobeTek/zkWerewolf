@@ -77,9 +77,9 @@ const HelpGuide = React.memo(() => (
 const Header = ({ wallet, selectedGame, currentNavItem }) => {
     return (
         <Box flexDirection="column" alignItems="center" marginBottom={1}>
-            <Box marginBottom={1}>
-                <Gradient name="retro">
-                    <BigText text="zkWerewolf" font="simpleBlock" lineHeight={3} />
+            <Box>
+                <Gradient name="retro" scale={0.5}>
+                    <BigText text="zkWerewolf" font="tiny" />
                 </Gradient>
             </Box>
             <Box flexDirection="column" alignItems="center">
@@ -126,6 +126,61 @@ const SideBar = React.memo(({ navItems, onSelect, isFocused, isOpen }) => {
         >
             <Text bold color="cyan">Menu</Text>
             <SelectInput items={navItems} onSelect={onSelect} isFocused={isFocused} />
+        </Box>
+    );
+});
+
+// --- GAME DETAILS TABLE ---
+const GameDetailsTable = React.memo(({ game }) => {
+    if (!game) return null;
+
+    return (
+        <Box
+            flexDirection="column"
+            padding={1}
+            borderStyle="single"
+            width="100%"
+            marginTop={1}
+        >
+            <Text bold color="cyan">Game Details</Text>
+            <Divider />
+            <Box flexDirection="column">
+                <Text><Text bold>ID:</Text> {game.id}</Text>
+                <Text><Text bold>W/V:</Text> {game.werewolves}/{game.villagers}</Text>
+                <Text><Text bold>State:</Text> {game.state}</Text>
+                <Text><Text bold>Role:</Text> {game.role}</Text>
+                <Text><Text bold>Alive/Dead:</Text> {game.playersAlive}/{game.playersDead}</Text>
+                <Text><Text bold>Players:</Text> {game.players.join(', ')}</Text>
+            </Box>
+        </Box>
+    );
+});
+
+// --- MY GAMES LIST ---
+const MyGames = React.memo(({ games, isFocused, onSelectGame }) => {
+    return (
+        <Box
+            flexDirection="column"
+            padding={2}
+            borderStyle="single"
+            flexGrow={1}
+            width="100%"
+            minHeight={0}
+        >
+            <Text bold color="cyan">My Games</Text>
+            <Divider />
+            <Box flexDirection="column" flexGrow={1} minHeight={0}>
+                <SelectInput
+                    items={games.map(game => ({ label: game.id, value: game.id }))}
+                    onSelect={item => onSelectGame(games.find(g => g.id === item.value))}
+                    isFocused={isFocused}
+                />
+            </Box>
+            {isFocused && (
+                <Box marginTop={1}>
+                    <Text dimColor>Use ↑/↓ to navigate, Enter to select a game.</Text>
+                </Box>
+            )}
         </Box>
     );
 });
@@ -226,49 +281,6 @@ const GamePlay = React.memo(
         );
     },
 );
-
-// --- MY GAMES TABLE ---
-const MyGames = React.memo(({ games, isFocused, onSelectGame }) => {
-    const data = useMemo(
-        () =>
-            games.map(game => ({
-                key: game.id,
-                ID: game.id,
-                'W/V': `${game.werewolves}/${game.villagers}`,
-                State: game.state,
-                'Winner/Role': game.winner || game.role,
-            })),
-        [games],
-    );
-    return (
-        <Box
-            flexDirection="column"
-            padding={2}
-            borderStyle="single"
-            flexGrow={1}
-            width="100%"
-            minHeight={0}
-        >
-            <Text bold color="cyan">My Games</Text>
-            <Divider />
-            <Box flexDirection="column" flexGrow={1} minHeight={0}>
-                <Table data={data} />
-            </Box>
-            <Box marginTop={1}>
-                <SelectInput
-                    items={games.map(game => ({ label: game.id, value: game.id }))}
-                    onSelect={item => onSelectGame(games.find(g => g.id === item.value))}
-                    isFocused={isFocused}
-                />
-            </Box>
-            {isFocused && (
-                <Box marginTop={1}>
-                    <Text dimColor>Use ↑/↓ to navigate, Enter to select a game.</Text>
-                </Box>
-            )}
-        </Box>
-    );
-});
 
 // --- LOGS COMPONENT ---
 const Logs = React.memo(({ games }) => {
@@ -575,11 +587,14 @@ export default function App() {
             />
             <Box flexDirection="column" flexGrow={1} width="75%" minHeight={0}>
                 {currentNavItem === 'my_games' && (
-                    <MyGames
-                        games={games}
-                        isFocused={focusedSection === 'content'}
-                        onSelectGame={handleSelectGame}
-                    />
+                    <>
+                        <MyGames
+                            games={games}
+                            isFocused={focusedSection === 'content'}
+                            onSelectGame={handleSelectGame}
+                        />
+                        <GameDetailsTable game={selectedGame} />
+                    </>
                 )}
                 {currentNavItem === 'play_game' && selectedGame && (
                     <GamePlay
