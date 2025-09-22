@@ -24,4 +24,13 @@ $  --help
     Hello, Jane
 ```
 
+- Install Forge ()
+- ./packageGame.sh
+
 Expects a screen size: 1680 X 682
+
+In a typical game of Werewolf, villagers try to identify the werewolves amongst them and vote them out, while werewolves attempt to eliminate as many villagers as possible to win.
+It is a game of incomplete information in that no user knows the role of any other user. How do we maintain privacy on a public chain? zKPs + Homomorphic encryption!
+An admin creates games, assigns roles, and manages game state. Players have thei roles encrypted and stored on chain (only accessible to them).
+If I don't know anyone's roles, how do I know the move they're making is valid?
+The players must create a move commitment (zkp) that proves that the action they have taken is valid

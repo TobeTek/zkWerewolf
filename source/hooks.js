@@ -1,47 +1,46 @@
 import { ethers } from 'ethers';
 import { useEffect, useState } from 'react';
-import ZkWerewolfABI from '../ZkWerewolfABI.json' with { type: 'json' };
-import { ZKWEREWOLF_CONTRACT_ADDRESS } from './services.js';
+import ZkWerewolfABI from '../forgeDeployment.json' with { type: 'json' };
+import { get25519KeyPair, getZkWerewolfContractAddress, logAction, } from './services.js';
 
 export function useWallet() {
     const [wallet, setWallet] = useState(null);
-
     useEffect(() => {
         const loadWallet = () => {
-
-
             const privateKey = process.env.ACCOUNT_PRIVATE_KEY;
             if (!privateKey) throw new Error('Private key not found in .env');
-            const provider = new ethers.JsonRpcProvider('http://localhost:8545');
-            const wallet = new ethers.Wallet(privateKey, provider);
+            // const provider = new ethers.JsonRpcProvider();
+            const wallet = new ethers.Wallet(privateKey);
             if (!wallet.address) throw new Error('No wallet address');
             setWallet(wallet);
-
         };
         loadWallet();
     }, []);
-
     const signMessage = async (message) => {
         if (!wallet) throw new Error('Wallet not loaded');
         return await wallet.signMessage(message);
     };
 
-    return { wallet, signMessage };
+    const getEncryptKeyPair = () => {
+        if (!wallet) throw new Error('Wallet not loaded');
+        return get25519KeyPair(wallet.privateKey)
+    }
+    return { wallet, signMessage, getEncryptKeyPair };
 }
 
 export function useZkWerewolfGame(gameId, providerOrSigner) {
     const [game, setGame] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-
-    const contract = new ethers.Contract(
-        ZKWEREWOLF_CONTRACT_ADDRESS,
+    const contractInstance = new ethers.Contract(
+        getZkWerewolfContractAddress(),
         ZkWerewolfABI,
         providerOrSigner,
     );
 
     const fetchGame = async () => {
         try {
+            setLoading(true);
             const [
                 admin,
                 adminPubKey,
@@ -51,31 +50,49 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
                 turnNumber,
                 lastTurnTimestamp,
                 active,
+                gameOver,
+                voteActive,
+                villagersAlive,
+                werewolvesDiscovered,
                 userRoleCommitments,
                 currentMoveCommitments,
             ] = await Promise.all([
-                contract.getAdmin(gameId),
-                contract.getAdminPubKey(gameId),
-                contract.getUserAddressesHash(gameId),
-                contract.getNumPlayers(gameId),
-                contract.getNumWerewolves(gameId),
-                contract.getTurnNumber(gameId),
-                contract.getLastTurnTimestamp(gameId),
-                contract.isActive(gameId),
-                contract.getUserRoleCommitments(gameId),
-                contract.getMoveCommitment(gameId),
+                contractInstance.games(gameId).then(g => g.admin),
+                contractInstance.games(gameId).then(g => g.adminPublicKey),
+                contractInstance.getUserAddressesHash(gameId),
+                contractInstance.getNumPlayers(gameId),
+                contractInstance.getNumWerewolves(gameId),
+                contractInstance.games(gameId).then(g => g.turnNumber.toNumber()),
+                contractInstance.games(gameId).then(g => g.lastTurnTimestamp.toNumber()),
+                contractInstance.games(gameId).then(g => g.active),
+                contractInstance.games(gameId).then(g => g.gameOver),
+                contractInstance.games(gameId).then(g => g.voteActive),
+                contractInstance.games(gameId).then(g => g.villagersAlive.toNumber()),
+                contractInstance.games(gameId).then(g => g.werewolvesDiscovered.toNumber()),
+                contractInstance.getUserRoleCommitments(gameId),
+                contractInstance.getCurrentMoveCommitments(gameId),
             ]);
             setGame({
+                id: gameId,
                 admin,
                 adminPubKey,
                 userAddressesHash,
                 numPlayers: numPlayers.toNumber(),
                 numWerewolves: numWerewolves.toNumber(),
-                turnNumber: turnNumber.toNumber(),
-                lastTurnTimestamp: lastTurnTimestamp.toNumber(),
+                turnNumber,
+                lastTurnTimestamp,
                 active,
+                gameOver,
+                voteActive,
+                villagersAlive,
+                werewolvesDiscovered,
                 userRoleCommitments,
                 currentMoveCommitments,
+                state: active ? 'Your turn' : 'Game over',
+                role: 'Villager', // Placeholder, replace with actual role logic
+                playersAlive: villagersAlive,
+                playersDead: numPlayers.toNumber() - villagersAlive,
+                players: await contractInstance.games(gameId).then(g => g.players),
             });
             setLoading(false);
         } catch (err) {
@@ -90,7 +107,8 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
 
     const commitMove = async (moveCommitment) => {
         try {
-            const tx = await contract.commitMove(gameId, moveCommitment);
+            logAction({ action: 'commitMove', gameId, moveCommitment });
+            const tx = await contractInstance.commitMove(gameId, moveCommitment);
             await tx.wait();
             await fetchGame();
         } catch (err) {
@@ -98,9 +116,10 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
         }
     };
 
-    const endTurn = async (commitments, proof) => {
+    const endTurn = async (commitments) => {
         try {
-            const tx = await contract.endTurn(gameId, commitments, proof);
+            logAction({ action: 'endTurn', gameId, commitments });
+            const tx = await contractInstance.endTurn(gameId, commitments);
             await tx.wait();
             await fetchGame();
         } catch (err) {
@@ -110,7 +129,41 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
 
     const startNextTurn = async () => {
         try {
-            const tx = await contract.startNextTurn(gameId);
+            logAction({ action: 'startNextTurn', gameId });
+            const tx = await contractInstance.startNextTurn(gameId);
+            await tx.wait();
+            await fetchGame();
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    const startVote = async () => {
+        try {
+            logAction({ action: 'startVote', gameId });
+            const tx = await contractInstance.startVote(gameId);
+            await tx.wait();
+            await fetchGame();
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    const castVote = async (target) => {
+        try {
+            logAction({ action: 'castVote', gameId, target });
+            const tx = await contractInstance.castVote(gameId, target);
+            await tx.wait();
+            await fetchGame();
+        } catch (err) {
+            setError(err.message);
+        }
+    };
+
+    const endVote = async () => {
+        try {
+            logAction({ action: 'endVote', gameId });
+            const tx = await contractInstance.endVote(gameId);
             await tx.wait();
             await fetchGame();
         } catch (err) {
@@ -128,15 +181,30 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
         const onNextTurnStarted = (gId, turnNumber) => {
             if (gId === gameId) fetchGame();
         };
-        contract.on('MoveCommitted', onMoveCommitted);
-        contract.on('TurnEnded', onTurnEnded);
-        contract.on('NextTurnStarted', onNextTurnStarted);
-        return () => {
-            contract.off('MoveCommitted', onMoveCommitted);
-            contract.off('TurnEnded', onTurnEnded);
-            contract.off('NextTurnStarted', onNextTurnStarted);
+        const onVoteStarted = (gId, initiator) => {
+            if (gId === gameId) fetchGame();
         };
-    }, [gameId, contract]);
+        const onVoteCast = (gId, voter, target) => {
+            if (gId === gameId) fetchGame();
+        };
+        const onVoteEnded = (gId) => {
+            if (gId === gameId) fetchGame();
+        };
+        contractInstance.on('MoveCommitted', onMoveCommitted);
+        contractInstance.on('TurnEnded', onTurnEnded);
+        contractInstance.on('NextTurnStarted', onNextTurnStarted);
+        contractInstance.on('VoteStarted', onVoteStarted);
+        contractInstance.on('VoteCast', onVoteCast);
+        contractInstance.on('VoteEnded', onVoteEnded);
+        return () => {
+            contractInstance.off('MoveCommitted', onMoveCommitted);
+            contractInstance.off('TurnEnded', onTurnEnded);
+            contractInstance.off('NextTurnStarted', onNextTurnStarted);
+            contractInstance.off('VoteStarted', onVoteStarted);
+            contractInstance.off('VoteCast', onVoteCast);
+            contractInstance.off('VoteEnded', onVoteEnded);
+        };
+    }, [gameId, contractInstance]);
 
     return {
         game,
@@ -145,5 +213,8 @@ export function useZkWerewolfGame(gameId, providerOrSigner) {
         commitMove,
         endTurn,
         startNextTurn,
+        startVote,
+        castVote,
+        endVote,
     };
 }

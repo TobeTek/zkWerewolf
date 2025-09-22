@@ -1,4 +1,5 @@
 import { ethers } from "ethers";
+import { get25519KeyPair } from "./services.js";
 
 
 const privateKeys = ["0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -17,14 +18,16 @@ for (const privateKey of privateKeys) {
     const wallet = new ethers.Wallet(privateKey);
 
     // Push the derived public key and address to the results array
+    const kp = get25519KeyPair(privateKey);
     results.push({
+        ...kp,
         privateKey: privateKey,
         publicKey: wallet.signingKey.publicKey,
-        address: wallet.address
+        address: wallet.address,
     });
 }
 
-// console.log(JSON.stringify(results));
+console.log(JSON.stringify(results));
 
 // ethers.SigningKey.computePublicKey()
 // console.log(ethers.computeAddress(results[0].publicKey));

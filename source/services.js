@@ -1,19 +1,23 @@
 import { decrypt as _decryptWithPrivateKey, encrypt as _encryptWithPubKey } from '@metamask/eth-sig-util';
 import { buildPoseidon } from 'circomlibjs';
 import * as dotenv from 'dotenv';
-import { ethers } from 'ethers';
+import { ethers, keccak256, encodeRlp, toBeHex } from 'ethers';
+import fs from 'fs';
+import path from 'path';
+import nacl from 'tweetnacl';
 
 dotenv.config();
 
-export const ZKWEREWOLF_CONTRACT_ADDRESS = '0x000'; // Replace with your contract address
-export const RPC_URL = ''; // Replace with your RPC URL
-export const ZKVERIFY_API_URL = "https://relayer-api.horizenlabs.io/api/v1";
-
+// --- Constants ---
 export const PLAYER_TYPES = {
     Villager: 0,
     Werewolf: 1,
-}
+};
 
+// --- Game State ---
+export const games = {};
+export const gameLogs = [];
+const logFilePath = path.join(process.cwd(), 'game.log');
 
 // --- Helper Functions ---
 export function encryptMsgWithPubKey(data, publicKey) {
@@ -37,14 +41,10 @@ export function generateRandomNumber() {
 }
 
 export function formatAddress(address) {
-  if (!address || address.length < 10) {
-    return address;
-  }
-
-  const start = address.slice(0, 6);
-  const end = address.slice(address.length - 4);
-
-  return `${start}...${end}`;
+    if (!address || address.length < 10) return address;
+    const start = address.slice(0, 6);
+    const end = address.slice(address.length - 4);
+    return `${start}...${end}`;
 }
 
 export function hexToUint8Array(hex) {
@@ -57,137 +57,243 @@ export function hexToUint8Array(hex) {
     return bytes;
 }
 
-async function poseidonHash(inputs) {
+export async function poseidonHash(inputs) {
     const poseidon = await buildPoseidon();
     return poseidon(inputs);
 }
 
-// --- Core Service Functions ---
-export async function createGame({ adminPubKey, playersPubKeys, numPlayers, noWerewolves }) {
-    const players = playersPubKeys.map(pubKey => ethers.computeAddress(pubKey));
+export function getbase64PubKey(publicKey) {
+    const rawPubKeyHex = publicKey.substring(4);
+    const rawPubKeyBytes = new Uint8Array(rawPubKeyHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+    const base64PubKey = Buffer.from(rawPubKeyBytes).toString('base64');
+    return base64PubKey;
+}
+
+export function get25519KeyPair(privateKey) {
+    const rawPrivateKeyHex = privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey;
+    const privateKeyBytes = Buffer.from(rawPrivateKeyHex, 'hex');
+    const keyPair = nacl.box.keyPair.fromSecretKey(privateKeyBytes);
+    const publicKeyBase64 = Buffer.from(keyPair.publicKey).toString('base64');
+    return { ...keyPair, publicKeyBase64 };
+}
+
+export function getZkWerewolfContractAddress() {
+    console.log(ZkWerewolfABI.transaction.from, ZkWerewolfABI.transaction.nonce);
+    return getContractAddress(ZkWerewolfABI.transaction.from, ZkWerewolfABI.transaction.nonce)
+}
+
+export function getContractAddress(senderAddress, nonce) {
+    // Ensure the nonce is a BigInt for RLP encoding
+    const formattedNonce = toBigInt(nonce);
+
+    // RLP-encode the sender address and nonce
+    const a = zeroPadBytes(toBeHex(formattedNonce), 32);
+    const rlpEncoded = encodeRlp([senderAddress, a]);
+
+    // Hash the RLP-encoded data and get the last 20 bytes
+    const contractAddress = getAddress('0x' + keccak256(rlpEncoded).substring(26));
+
+    return contractAddress;
+}
+
+// --- Game Simulation Functions ---
+export function createGame({ adminPubKey, players, playersEncryptPubKeys, numPlayers, noWerewolves }) {
+    const gameId = Object.keys(games).length + 1;
     const userAddressesHash = ethers.keccak256(
         ethers.AbiCoder.defaultAbiCoder().encode(['address[]'], [players])
     );
-    const playerRoles = [];
-    for (let i = 0; i < numWerewolves; i++) {
-        playerRoles.push(PLAYER_TYPES.Werewolf);
-    }
-    for (let i = 0; i < numPlayers - numWerewolves; i++) {
-        playerRoles.push(PLAYER_TYPES.Villager);
-    }
 
-    // Shuffle using Fisher-Yates shuffle
+    const playerRoles = [];
+    for (let i = 0; i < noWerewolves; i++) playerRoles.push(PLAYER_TYPES.Werewolf);
+    for (let i = 0; i < numPlayers - noWerewolves; i++) playerRoles.push(PLAYER_TYPES.Villager);
+
+    // Shuffle roles
     for (let i = playerRoles.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [playerRoles[i], playerRoles[j]] = [playerRoles[j], playerRoles[i]];
     }
 
-    const userRoleCommitments = playersPubKeys.map((pKey, index) => {
+    const userRoleCommitments = playersEncryptPubKeys.map((pKey, index) => {
         const player = players[index];
         const role = playerRoles[index];
         const secret = generateRandomNumber();
-
         return encryptMsgWithPubKey(JSON.stringify({ player, role, secret }), pKey);
-
-        // return ethers.keccak256(
-        //     ethers.AbiCoder.defaultAbiCoder().encode(
-        //         ['address', 'string', 'bytes32'],
-        //         [player, role, secret]
-        //     )
-        // );
     });
-    const tx = await contract.createGame(
-        adminPublicKey,
+
+    games[gameId] = {
+        admin: players[0],
+        adminPubKey,
         userAddressesHash,
-        players,
+        numPlayers,
         noWerewolves,
-        userRoleCommitments
-    );
-    const receipt = await tx.wait();
-    const event = receipt.logs.find(log => log.topics[0] === ethers.id('GameCreated(uint256,address,bytes,bytes32,uint256,uint256,bytes32[])'));
-    return ethers.decodeEventLog('GameCreated', event.data, event.topics).gameId;
+        players,
+        playerRoles,
+        userRoleCommitments,
+        inGame: players.reduce((acc, player) => ({ ...acc, [player]: true }), {}),
+        moveCommitments: {},
+        hasInitiatedVote: {},
+        hasVoted: {},
+        votesAgainstPlayer: {},
+        turnNumber: 1,
+        lastTurnTimestamp: Date.now(),
+        gameOver: false,
+        active: true,
+        voteActive: false,
+        voteStartTime: 0,
+        werewolvesDiscovered: 0,
+        villagersAlive: numPlayers - noWerewolves,
+        currentMoveCommitments: [],
+    };
+
+    logAction(`Game ${gameId} created with ${numPlayers} players and ${noWerewolves} werewolves.`);
+    return gameId;
 }
 
-export async function getAllGamesForAddress(address) {
-    const filter = contract.filters.PlayerAddedToGame(null, null, address);
-    const events = await contract.queryFilter(filter);
-    return [...new Set(events.map(event => event.args.gameId.toString()))];
+export function startVote(gameId, player) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (game.voteActive) throw new Error("Vote already active");
+    if (game.hasInitiatedVote[player]) throw new Error("Already started a vote");
+
+    game.voteActive = true;
+    game.voteStartTime = Date.now();
+    game.hasInitiatedVote[player] = true;
+
+    logAction(`Vote started in game ${gameId} by ${formatAddress(player)}.`);
 }
 
-export async function hasInitiatedVote(gameId, address) {
-    return contract.isPlayerInGame(gameId, address) && (await contract.hasInitiatedVote(gameId, address));
+export function castVote(gameId, voter, target) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (!game.voteActive) throw new Error("No active vote");
+    if (Date.now() > game.voteStartTime + 3 * 60 * 1000) throw new Error("Vote time elapsed");
+    if (game.hasVoted[voter]) throw new Error("Already voted");
+
+    game.votesAgainstPlayer[target] = (game.votesAgainstPlayer[target] || 0) + 1;
+    game.hasVoted[voter] = true;
+
+    logAction(`Vote cast in game ${gameId} by ${formatAddress(voter)} against ${formatAddress(target)}.`);
 }
 
-export async function hasVoted(gameId, address) {
-    return contract.isPlayerInGame(gameId, address) && (await contract.hasVoted(gameId, address));
+export function endVote(gameId) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (!game.voteActive) throw new Error("No active vote");
+    if (Date.now() < game.voteStartTime + 3 * 60 * 1000) throw new Error("Vote time not elapsed");
+
+    let mostVoted = null;
+    let maxVotes = 0;
+
+    game.players.forEach(player => {
+        if (game.inGame[player]) {
+            const votes = game.votesAgainstPlayer[player] || 0;
+            if (votes > maxVotes) {
+                maxVotes = votes;
+                mostVoted = player;
+            }
+        }
+    });
+
+    if (mostVoted) {
+        game.inGame[mostVoted] = false;
+        game.villagersAlive--;
+        logAction(`Player ${formatAddress(mostVoted)} was voted out in game ${gameId}.`);
+    }
+
+    game.voteActive = false;
+    game.hasInitiatedVote = {};
+    game.hasVoted = {};
+    game.votesAgainstPlayer = {};
+
+    logAction(`Vote ended in game ${gameId}.`);
 }
 
-export async function hasBeenVotedOut(gameId, address) {
-    return !(await contract.isPlayerInGame(gameId, address));
+export function commitMove(gameId, player, moveCommitment) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (!game.inGame[player]) throw new Error("Player not in game");
+    if (game.moveCommitments[player]) throw new Error("Already submitted move this turn");
+
+    game.moveCommitments[player] = moveCommitment;
+    game.currentMoveCommitments.push(moveCommitment);
+
+    logAction(`Move committed in game ${gameId} by ${formatAddress(player)}.`);
 }
 
-export async function hasBeenKilled(gameId, address) {
-    return !(await contract.isPlayerInGame(gameId, address));
+export function endTurn(gameId, commitments) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (Date.now() < game.lastTurnTimestamp + 3 * 60 * 1000) throw new Error("Turn time not elapsed");
+    if (game.voteActive) throw new Error("Vote must be completed before turn is marked as over");
+
+    game.turnNumber++;
+    game.lastTurnTimestamp = Date.now();
+    game.currentMoveCommitments = [];
+
+    logAction(`Turn ${game.turnNumber} ended in game ${gameId}.`);
 }
 
-export async function startVote(gameId) {
-    const tx = await contract.startVote(gameId);
-    await tx.wait();
+export function reportEndOfTurnEvents(gameId, playersKilled, werewolvesDiscovered, gameOverReached, werewolvesWon) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    if (game.gameOver) throw new Error("Game is already over");
+    if (Date.now() < game.lastTurnTimestamp + 3 * 60 * 1000) throw new Error("Too soon to start next turn");
+
+    playersKilled.forEach(player => {
+        game.inGame[player] = false;
+        game.villagersAlive--;
+        logAction(`Player ${formatAddress(player)} was killed in game ${gameId}.`);
+    });
+
+    werewolvesDiscovered.forEach(player => {
+        game.inGame[player] = false;
+        game.werewolvesDiscovered++;
+        logAction(`Werewolf ${formatAddress(player)} was discovered in game ${gameId}.`);
+    });
+
+    if (gameOverReached) {
+        game.active = false;
+        game.gameOver = true;
+        logAction(`Game ${gameId} over. Werewolves ${werewolvesWon ? 'won' : 'lost'}.`);
+    }
+
+    game.lastTurnTimestamp = Date.now();
 }
 
-export async function castVote(gameId, target) {
-    const tx = await contract.castVote(gameId, target);
-    await tx.wait();
+// --- Simulate Other Players ---
+export function simulateMoveCommitment(gameId, player, moveCommitment) {
+    commitMove(gameId, player, moveCommitment);
 }
 
-export async function endVote(gameId) {
-    const tx = await contract.endVote(gameId);
-    await tx.wait();
+export function simulateVote(gameId, voter, target) {
+    castVote(gameId, voter, target);
 }
 
-export async function getTurnEndTimestamp(gameId) {
-    const lastTurnTimestamp = await contract.getLastTurnTimestamp(gameId);
-    return lastTurnTimestamp.toNumber() + 3 * 60; // 3 minutes in seconds
+// --- Game State Accessors ---
+export function getGame(gameId) {
+    return games[gameId];
 }
 
-export async function commitMove(gameId, moveCommitment) {
-    const tx = await contract.commitMove(gameId, moveCommitment);
-    await tx.wait();
+export function getAllGames() {
+    return games;
 }
 
-export async function endTurn(gameId, commitments) {
-    const tx = await contract.endTurn(gameId, commitments);
-    await tx.wait();
+export function getPlayerRole(gameId, player) {
+    const game = games[gameId];
+    if (!game) throw new Error("Game not found");
+    const index = game.players.indexOf(player);
+    return game.playerRoles[index];
 }
 
-export async function reportEndOfTurnEvents(gameId, playersKilled, werewolvesDiscovered, gameOverReached, werewolvesWon) {
-    const tx = await contract.reportEndOfTurnEvents(gameId, playersKilled, werewolvesDiscovered, gameOverReached, werewolvesWon);
-    await tx.wait();
-}
-
-// --- Event Listeners ---
-export function setupEventListeners(callbacks) {
-    contract.on('GameCreated', callbacks.onGameCreated);
-    contract.on('PlayerAddedToGame', callbacks.onPlayerAdded);
-    contract.on('MoveCommitted', callbacks.onMoveCommitted);
-    contract.on('TurnEnded', callbacks.onTurnEnded);
-    contract.on('PlayerKilled', callbacks.onPlayerKilled);
-    contract.on('PlayerVotedOut', callbacks.onPlayerVotedOut);
-    contract.on('WerewolfDiscovered', callbacks.onWerewolfDiscovered);
-    contract.on('VoteStarted', callbacks.onVoteStarted);
-    contract.on('VoteCast', callbacks.onVoteCast);
-    contract.on('GameOver', callbacks.onGameOver);
-}
-
-export function removeEventListeners(callbacks) {
-    contract.off('GameCreated', callbacks.onGameCreated);
-    contract.off('PlayerAddedToGame', callbacks.onPlayerAdded);
-    contract.off('MoveCommitted', callbacks.onMoveCommitted);
-    contract.off('TurnEnded', callbacks.onTurnEnded);
-    contract.off('PlayerKilled', callbacks.onPlayerKilled);
-    contract.off('PlayerVotedOut', callbacks.onPlayerVotedOut);
-    contract.off('WerewolfDiscovered', callbacks.onWerewolfDiscovered);
-    contract.off('VoteStarted', callbacks.onVoteStarted);
-    contract.off('VoteCast', callbacks.onVoteCast);
-    contract.off('GameOver', callbacks.onGameOver);
+// --- Logging ---
+export function logAction(action) {
+    const logEntry = `${new Date().toISOString()} - ${action}\n`;
+    gameLogs.push(action);
+    try {
+        fs.appendFileSync(logFilePath, logEntry);
+        console.log('Logged action to file:', action);
+    } catch (error) {
+        console.error('Failed to write to log file:', error);
+    }
+    console.log('Logged action:', action);
 }

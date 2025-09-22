@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { Box, Text, useApp, useInput } from 'ink';
 import BigText from 'ink-big-text';
 import Divider from 'ink-divider';
@@ -6,60 +7,8 @@ import Gradient from 'ink-gradient';
 import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useWallet, } from './hooks.js';
-import { formatAddress, createGame, } from './services.js';
-
-// --- MOCK DATA ---
-const mockGames = [
-    {
-        id: 'Game1',
-        werewolves: 2,
-        villagers: 4,
-        state: 'Waiting for others',
-        winner: null,
-        role: 'Villager',
-        playersAlive: 6,
-        playersDead: 0,
-        players: ['Alice', 'Bob', 'Charlie', 'Dave', 'Eve', 'Frank'],
-        logs: [],
-    },
-    {
-        id: 'Game2',
-        werewolves: 1,
-        villagers: 3,
-        state: 'Your turn',
-        winner: null,
-        role: 'Werewolf',
-        playersAlive: 4,
-        playersDead: 2,
-        players: ['Alice', 'Bob', 'Charlie', 'Dave'],
-        logs: [],
-    },
-    {
-        id: 'Game3',
-        werewolves: 2,
-        villagers: 2,
-        state: 'Game over',
-        winner: 'Werewolves',
-        role: 'Villager',
-        playersAlive: 2,
-        playersDead: 4,
-        players: ['Alice', 'Bob'],
-        logs: [],
-    },
-];
-
-// --- NAVIGATION CONSTANTS ---
-const getNavItems = (selectedGame, currentNavItem) => {
-    const baseItems = [
-        { label: 'My Games', value: 'my_games' },
-        { label: 'Play Game', value: 'play_game' },
-        { label: 'Logs', value: 'logs' },
-        { label: 'Create Game', value: 'create' },
-    ];
-    baseItems.push({ label: 'Exit', value: 'exit' });
-    return baseItems;
-};
+import { useWallet, useZkWerewolfGame } from './hooks.js';
+import { createGame, formatAddress, gameLogs, getAllGamesForAddress } from './services.js';
 
 // --- HELP GUIDE/KEY MAP FOOTER ---
 const HelpGuide = React.memo(() => (
@@ -75,6 +24,7 @@ const HelpGuide = React.memo(() => (
 
 // --- HEADER ---
 const Header = ({ wallet, selectedGame, currentNavItem }) => {
+    const { getEncryptKeyPair } = useWallet();
     return (
         <Box flexDirection="column" alignItems="center" marginBottom={1}>
             <Box>
@@ -85,6 +35,9 @@ const Header = ({ wallet, selectedGame, currentNavItem }) => {
             <Box flexDirection="column" alignItems="center">
                 <Text bold>
                     Public Key: {formatAddress(wallet?.address) || 'Loading wallet...'}
+                </Text>
+                <Text>
+                    Invite Key: {wallet && getEncryptKeyPair().publicKeyBase64}
                 </Text>
                 {currentNavItem === 'play_game' && selectedGame && (
                     <Box marginTop={1}>
@@ -145,7 +98,7 @@ const GameDetailsTable = React.memo(({ game }) => {
             <Divider />
             <Box flexDirection="column">
                 <Text><Text bold>ID:</Text> {game.id}</Text>
-                <Text><Text bold>W/V:</Text> {game.werewolves}/{game.villagers}</Text>
+                <Text><Text bold>W/V:</Text> {game.numWerewolves}/{game.numPlayers - game.numWerewolves}</Text>
                 <Text><Text bold>State:</Text> {game.state}</Text>
                 <Text><Text bold>Role:</Text> {game.role}</Text>
                 <Text><Text bold>Alive/Dead:</Text> {game.playersAlive}/{game.playersDead}</Text>
@@ -156,7 +109,15 @@ const GameDetailsTable = React.memo(({ game }) => {
 });
 
 // --- MY GAMES LIST ---
-const MyGames = React.memo(({ games, isFocused, onSelectGame }) => {
+const MyGames = React.memo(({ games, isFocused, onSelectGame, loading }) => {
+    if (loading) {
+        return (
+            <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
+                <Spinner type="dots" />
+                <Text color="yellowBright" marginTop={1}>Loading games...</Text>
+            </Box>
+        );
+    }
     return (
         <Box
             flexDirection="column"
@@ -340,16 +301,6 @@ const GameCreation = React.memo(({ onCreate, isFocused, isCreating, wallet }) =>
                         max: 5,
                         required: true,
                     },
-                    {
-                        type: 'integer',
-                        name: 'numVillagers',
-                        label: 'Number of Villagers',
-                        initialValue: 4,
-                        min: 1,
-                        max: 5,
-                        required: true,
-                        description: 'Total players (Werewolves + Villagers) must be 6 or less.',
-                    },
                 ],
             },
         ],
@@ -357,9 +308,9 @@ const GameCreation = React.memo(({ onCreate, isFocused, isCreating, wallet }) =>
     const onSubmit = async values => {
         if (!wallet) return;
         const werewolves = parseInt(values.numWerewolves);
-        const villagers = parseInt(values.numVillagers);
-        if (werewolves + villagers > 6) {
-            console.log('Total players must be 6 or less.');
+        const numPlayers = values.addressList.split(',').length;
+        if (werewolves >= numPlayers) {
+            console.log('Number of werewolves must be less than the number of players.');
             return;
         }
         try {
@@ -367,13 +318,11 @@ const GameCreation = React.memo(({ onCreate, isFocused, isCreating, wallet }) =>
                 JSON.stringify({
                     addresses: values.addressList.split(',').map(addr => addr.trim()),
                     werewolves,
-                    villagers,
                 }),
             );
             onCreate(
                 values.addressList.split(',').map(addr => addr.trim()),
                 werewolves,
-                villagers,
                 signature,
             );
         } catch (error) {
@@ -405,15 +354,16 @@ const GameCreation = React.memo(({ onCreate, isFocused, isCreating, wallet }) =>
 export default function App() {
     const [currentNavItem, setCurrentNavItem] = useState('my_games');
     const [role, setRole] = useState(null);
-    const [games, setGames] = useState(mockGames);
+    const [games, setGames] = useState([]);
     const [focusedSection, setFocusedSection] = useState('content');
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [selectedGame, setSelectedGame] = useState(null);
     const [isTerminalTooSmall, setIsTerminalTooSmall] = useState(false);
+    const [loadingGames, setLoadingGames] = useState(false);
     const { exit } = useApp();
-    const { wallet, signMessage } = useWallet();
+    const { wallet, signMessage, getEncryptKeyPair } = useWallet();
 
     useEffect(() => {
         const checkTerminalSize = () => {
@@ -426,6 +376,25 @@ export default function App() {
             process.stdout.off('resize', checkTerminalSize);
         };
     }, []);
+
+    const loadGames = useCallback(async () => {
+        if (!wallet) return;
+        setLoadingGames(true);
+        try {
+            const gameIds = await getAllGamesForAddress(wallet.address);
+            const gamePromises = gameIds.map(id => useZkWerewolfGame(id, wallet));
+            const gameResults = await Promise.all(gamePromises.map(g => g.game));
+            setGames(gameResults.filter(g => g));
+        } catch (error) {
+            console.error('Failed to load games:', error);
+        } finally {
+            setLoadingGames(false);
+        }
+    }, [wallet]);
+
+    useEffect(() => {
+        loadGames();
+    }, [wallet, loadGames]);
 
     const onNavItemSelected = useCallback(
         item => {
@@ -440,121 +409,64 @@ export default function App() {
     );
 
     const handleGameCreate = useCallback(
-        async (addresses, werewolves, villagers, signature) => {
+        async (addresses, werewolves, signature) => {
             setIsCreating(true);
             try {
                 const gameId = await createGame({
-                    adminPubKey: wallet.publicKey,
+                    adminPubKey: wallet.signingKey.publicKey,
                     playersPubKeys: addresses,
-                    numPlayers: werewolves + villagers,
+                    numPlayers: addresses.length,
                     noWerewolves: werewolves,
                 });
-                const newGame = {
-                    id: `Game${gameId}`,
-                    werewolves,
-                    villagers,
-                    state: 'Waiting for others',
-                    winner: null,
-                    role: 'Villager',
-                    playersAlive: werewolves + villagers,
-                    playersDead: 0,
-                    players: addresses,
-                    logs: [],
-                };
-                setGames([...games, newGame]);
+                await loadGames();
             } catch (error) {
                 console.error('Failed to create game:', error);
             } finally {
                 setIsCreating(false);
             }
         },
-        [games, wallet],
+        [wallet, loadGames],
     );
 
     const handleAction = useCallback(
-        action => {
+        async action => {
+            if (!selectedGame || !wallet) return;
             setIsSubmitting(true);
-            setGames(prevGames =>
-                prevGames.map(game =>
-                    game.id === selectedGame.id
-                        ? {
-                            ...game,
-                            logs: [
-                                ...game.logs,
-                                {
-                                    action,
-                                    player: 'You',
-                                    target: null,
-                                    status: 'proof pending',
-                                },
-                            ],
-                        }
-                        : game,
-                ),
-            );
-            setTimeout(() => {
-                setGames(prevGames =>
-                    prevGames.map(game =>
-                        game.id === selectedGame.id
-                            ? {
-                                ...game,
-                                state: 'Turn submitted',
-                                logs: game.logs.map((log, i) =>
-                                    i === game.logs.length - 1 ? { ...log, status: 'verified' } : log,
-                                ),
-                            }
-                            : game,
-                    ),
-                );
+            try {
+                if (action === 'kill') {
+                    await useZkWerewolfGame(selectedGame.id, wallet).commitMove(selectedGame.id, ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['string'], ['kill'])));
+                } else if (action === 'start_vote') {
+                    await useZkWerewolfGame(selectedGame.id, wallet).startVote(selectedGame.id);
+                }
+                await loadGames();
+            } catch (error) {
+                console.error('Failed to perform action:', error);
+            } finally {
                 setIsSubmitting(false);
-            }, 2000);
+            }
         },
-        [selectedGame, setIsSubmitting, setGames],
+        [selectedGame, wallet, loadGames],
     );
 
     const handleVote = useCallback(
-        target => {
+        async target => {
+            if (!selectedGame || !wallet) return;
             setIsSubmitting(true);
-            setGames(prevGames =>
-                prevGames.map(game =>
-                    game.id === selectedGame.id
-                        ? {
-                            ...game,
-                            logs: [
-                                ...game.logs,
-                                {
-                                    action: 'vote',
-                                    player: 'You',
-                                    target,
-                                    status: 'proof pending',
-                                },
-                            ],
-                        }
-                        : game,
-                ),
-            );
-            setTimeout(() => {
-                setGames(prevGames =>
-                    prevGames.map(game =>
-                        game.id === selectedGame.id
-                            ? {
-                                ...game,
-                                state: 'Turn submitted',
-                                logs: game.logs.map((log, i) =>
-                                    i === game.logs.length - 1 ? { ...log, status: 'verified' } : log,
-                                ),
-                            }
-                            : game,
-                    ),
-                );
+            try {
+                await useZkWerewolfGame(selectedGame.id, wallet).castVote(selectedGame.id, target);
+                await loadGames();
+            } catch (error) {
+                console.error('Failed to cast vote:', error);
+            } finally {
                 setIsSubmitting(false);
-            }, 2000);
+            }
         },
-        [selectedGame, setIsSubmitting, setGames],
+        [selectedGame, wallet, loadGames],
     );
 
     const handleSelectGame = useCallback(
-        game => {
+        (game) => {
+            if (!game) return;
             setSelectedGame(game);
             setRole(game.role);
         },
@@ -574,6 +486,12 @@ export default function App() {
         [isMenuOpen],
     );
 
+    useEffect(() => {
+        return () => {
+            fs.writeFileSync('game_logs.json', JSON.stringify(gameLogs, null, 2));
+        };
+    }, []);
+
     if (isTerminalTooSmall) {
         return (
             <Box flexDirection="column" alignItems="center" justifyContent="center" height="100%">
@@ -587,7 +505,13 @@ export default function App() {
     return (
         <MainLayout wallet={wallet} selectedGame={selectedGame} currentNavItem={currentNavItem}>
             <SideBar
-                navItems={getNavItems(selectedGame, currentNavItem)}
+                navItems={[
+                    { label: 'My Games', value: 'my_games' },
+                    { label: 'Play Game', value: 'play_game' },
+                    { label: 'Logs', value: 'logs' },
+                    { label: 'Create Game', value: 'create' },
+                    { label: 'Exit', value: 'exit' },
+                ]}
                 onSelect={onNavItemSelected}
                 isFocused={focusedSection === 'sidebar'}
                 isOpen={isMenuOpen}
@@ -599,8 +523,9 @@ export default function App() {
                             games={games}
                             isFocused={focusedSection === 'content'}
                             onSelectGame={handleSelectGame}
+                            loading={loadingGames}
                         />
-                        <GameDetailsTable game={selectedGame} />
+                        {selectedGame && <GameDetailsTable game={selectedGame} />}
                     </>
                 )}
                 {currentNavItem === 'play_game' && selectedGame && (

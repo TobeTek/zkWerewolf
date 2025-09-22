@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 contract ZkWerewolf {
+	// --- State Variables and Structs ---
 	struct Game {
 		address admin;
 		bytes adminPublicKey;
@@ -38,8 +39,7 @@ contract ZkWerewolf {
 		bytes adminPublicKey,
 		bytes32 userAddressesHash,
 		uint256 numPlayers,
-		uint256 numWerewolves,
-		string[] userRoleCommitments
+		uint256 numWerewolves
 	);
 	event PlayerAddedToGame(
 		uint256 indexed gameId,
@@ -51,11 +51,7 @@ contract ZkWerewolf {
 		address indexed player,
 		string commitment
 	);
-	event TurnEnded(
-		uint256 indexed gameId,
-		uint256 turnNumber,
-		string[] commitments
-	);
+	event TurnEnded(uint256 indexed gameId, uint256 turnNumber);
 	event PlayerKilled(uint256 indexed gameId, address indexed player);
 	event PlayerVotedOut(uint256 indexed gameId, address indexed player);
 	event WerewolfDiscovered(uint256 indexed gameId, address indexed player);
@@ -84,6 +80,15 @@ contract ZkWerewolf {
 	}
 
 	// --- Core Functions ---
+	/**
+	 * @dev Creates a new Zk-Werewolf game instance.
+	 * @param adminPublicKey The admin's public key for off-chain encryption.
+	 * @param userAddressesHash A hash of all player addresses.
+	 * @param players An array of all player addresses.
+	 * @param numWerewolves The number of werewolves in the game.
+	 * @param userRoleCommitments An array of commitments for each player's role.
+	 * @return The ID of the newly created game.
+	 */
 	function createGame(
 		bytes calldata adminPublicKey,
 		bytes32 userAddressesHash,
@@ -110,12 +115,12 @@ contract ZkWerewolf {
 		g.active = true;
 		g.turnNumber = 1;
 		g.lastTurnTimestamp = block.timestamp;
-		g.userRoleCommitments = userRoleCommitments;
 		g.villagersAlive = players.length - numWerewolves;
-		g.players = players;
 
 		for (uint256 i = 0; i < players.length; i++) {
 			g.inGame[players[i]] = true;
+			g.userRoleCommitments.push(userRoleCommitments[i]);
+			g.players.push(players[i]);
 			emit PlayerAddedToGame(gameId, msg.sender, players[i]);
 		}
 
@@ -125,12 +130,15 @@ contract ZkWerewolf {
 			adminPublicKey,
 			userAddressesHash,
 			players.length,
-			numWerewolves,
-			userRoleCommitments
+			numWerewolves
 		);
 		return gameId;
 	}
 
+	/**
+	 * @dev Starts a new voting session for a game.
+	 * @param gameId The ID of the game.
+	 */
 	function startVote(
 		uint256 gameId
 	) external gameActive(gameId) onlyInGame(gameId) {
@@ -144,6 +152,11 @@ contract ZkWerewolf {
 		emit VoteStarted(gameId, msg.sender);
 	}
 
+	/**
+	 * @dev Allows a player to cast a vote against another player.
+	 * @param gameId The ID of the game.
+	 * @param target The address of the player being voted against.
+	 */
 	function castVote(
 		uint256 gameId,
 		address target
@@ -161,6 +174,11 @@ contract ZkWerewolf {
 		emit VoteCast(gameId, msg.sender, target);
 	}
 
+	/**
+	 * @dev Ends the current voting session and tallies the votes.
+	 * Only the game admin can call this function.
+	 * @param gameId The ID of the game.
+	 */
 	function endVote(
 		uint256 gameId
 	) external onlyGameAdmin(gameId) gameActive(gameId) {
@@ -192,7 +210,7 @@ contract ZkWerewolf {
 		}
 
 		g.voteActive = false;
-
+		// Reset vote mappings for all players in the game
 		for (uint256 i = 0; i < playersLength; i++) {
 			address player = g.players[i];
 			delete g.votesAgainstPlayer[player];
@@ -200,6 +218,11 @@ contract ZkWerewolf {
 		}
 	}
 
+	/**
+	 * @dev Allows a player to submit a commitment for their move.
+	 * @param gameId The ID of the game.
+	 * @param moveCommitment The commitment string.
+	 */
 	function commitMove(
 		uint256 gameId,
 		string calldata moveCommitment
@@ -215,10 +238,12 @@ contract ZkWerewolf {
 		emit MoveCommitted(gameId, msg.sender, moveCommitment);
 	}
 
-	function endTurn(
-		uint256 gameId,
-		string[] calldata commitments
-	) external gameActive(gameId) {
+	/**
+	 * @dev Ends the current turn. This function is for signalling and clearing state.
+	 * The actual events of the turn are reported by the admin.
+	 * @param gameId The ID of the game.
+	 */
+	function endTurn(uint256 gameId) external gameActive(gameId) {
 		Game storage g = games[gameId];
 		require(
 			block.timestamp >= g.lastTurnTimestamp + TURN_DURATION,
@@ -229,12 +254,20 @@ contract ZkWerewolf {
 			'Vote must be completed before turn is marked as over'
 		);
 
-		emit TurnEnded(gameId, g.turnNumber, commitments);
+		emit TurnEnded(gameId, g.turnNumber);
 		delete g.currentMoveCommitments;
 		g.turnNumber++;
 		g.lastTurnTimestamp = block.timestamp;
 	}
 
+	/**
+	 * @dev Allows the admin to report the events of the turn, such as players killed or werewolves discovered.
+	 * @param gameId The ID of the game.
+	 * @param playersKilled Array of players to be marked as killed.
+	 * @param werewolvesDiscovered Array of werewolves to be marked as discovered.
+	 * @param gameOverReached A boolean indicating if the game has ended.
+	 * @param werewolvesWon A boolean indicating if werewolves won.
+	 */
 	function reportEndOfTurnEvents(
 		uint256 gameId,
 		address[] calldata playersKilled,
@@ -252,7 +285,7 @@ contract ZkWerewolf {
 		for (uint256 i = 0; i < playersKilled.length; i++) {
 			address player = playersKilled[i];
 			g.inGame[player] = false;
-			g.villagersAlive;
+			g.villagersAlive--;
 			emit PlayerKilled(gameId, player);
 		}
 
@@ -272,7 +305,7 @@ contract ZkWerewolf {
 		g.lastTurnTimestamp = block.timestamp;
 	}
 
-	// --- View Functions ---
+	// --- View Functions (unchanged as they are already efficient) ---
 	function getAdmin(uint gameId) external view returns (address) {
 		return games[gameId].admin;
 	}
