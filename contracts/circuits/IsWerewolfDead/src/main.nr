@@ -2,3 +2,7 @@
 // Secret for each user and their roles
 // Create a public commitment with a hash of each user address, role and secret
 // The list of player addresses is a public input
+
+fn main(x: Field, y: Field) {
+    assert(x * y == 0) // Placeholder
+}

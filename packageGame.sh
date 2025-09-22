@@ -5,6 +5,7 @@ echo $ACCOUNT_PRIVATE_KEY
 
 # 
 forge build --root contracts --via-ir
+find contracts/circuits -mindepth 1 -maxdepth 1 -type d -exec sh -c 'echo "Compiling {}" && cd "{}" && nargo compile' \;
 
 # Copy zkWerewolf ABI to root
 cp contracts/out/ZkWerewolf.sol/ZkWerewolf.json source/ZkWerewolfABI.json
