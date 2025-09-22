@@ -1,7 +1,4 @@
-use std::hash::pedersen_commitment;
-use std::embedded_curve_ops::{
-    EmbeddedCurvePoint,
-};
+use std::hash::pedersen_hash;
 
 // The key trick is:
 // The product of two values is zero if either is zero.
@@ -15,8 +12,8 @@ fn main(
     user_role: Field,        
     user_target: Field,
     random_secret: Field 
-) -> pub EmbeddedCurvePoint {
+) -> pub Field {
     assert((user_role - 1) * user_target == 0);
-    let user_role_commitment = pedersen_commitment([user_role, user_target, random_secret]);
+    let user_role_commitment = pedersen_hash([user_role, user_target, random_secret]);
     user_role_commitment
 }
