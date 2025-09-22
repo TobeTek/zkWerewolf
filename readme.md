@@ -1,4 +1,4 @@
-# zkWerewolf
+# zkWerewolf (WIP)
 
 ### A privacy-preserving game of Werewolf on the blockchain
 
@@ -10,6 +10,8 @@ This project implements a decentralized version of the classic social deduction 
 ## 📼 Video Walkthrough
 
 **Watch the full walkthrough**: [https://drive.google.com/file/d/14VC4bRWabFiaamMBCY4_XfqQjTOgLzW6/view?usp=sharing](https://drive.google.com/file/d/14VC4bRWabFiaamMBCY4_XfqQjTOgLzW6/view?usp=sharing)
+
+Pitch Deck: [Pitch Deck](https://docs.google.com/presentation/d/1LnIiE81_60yBQAzEZhiVrkWLb_Bv3mfRdlEwbnPNkWw/edit?usp=sharing)
 
 ## 🛠️ Installation & Setup
 
@@ -63,3 +65,23 @@ To preserve this crucial element of secrecy on a public chain where all data is 
 - `source/services.new.js` -> Service functions and helpers that actually interact with the blockchain
 
 - `source/zkp.js` -> Partially integrated zkVerify API for verifying proofs
+
+
+## TODOS
+- Finish integrating the UI
+- Finish integrating the zkVerify API
+- Create the circuit for admin to prove game state
+- Improve the TUI. Create a web UI?
+- Allow smart contract to handle role assignment autonomously (sourcing entropy from an oracle for example)
+
+
+## Tech Stack
+- Ink TUI (A React framework for building interactive command-line interfaces)
+
+- Noir (A domain-specific language for writing Zero-Knowledge circuits)
+
+- Forge (A development framework for testing and deploying smart contracts on Ethereum)
+
+- Ethers.js (A JavaScript library for interacting with the Ethereum blockchain)
+
+- zkVerify API (A service for verifying zero-knowledge proofs on a smart contract)
